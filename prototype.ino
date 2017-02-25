@@ -17,56 +17,43 @@ The MPU6050 class is from Jeff Rowbergs library: https://github.com/jrowberg/i2c
 
 #include <avr/io.h>
 #include <Arduino.h>
+#include <Wire/Wire.h>
 #include <util/delay.h>
 
-#include <MPU6050.h>
-#include <Servo.h>
+#include <../I2C/MPU6050/MPU6050.h>
+#include <../Servo/Servo.h>
 #include "Kalman.h"
 
-
-#define MOTOR_1_MID 1580
-#define MOTOR_2_MID 1350
-#define MOTOR_3_MID 1430
-#define MOTOR_4_MID 1490
-#define MOTOR_BACKUP_MID 1450
-
-
+//main components of input. sensor and the raw values
 MPU6050 mpu6050;
 int16_t accX, accY, accZ;
 int16_t gyroX, gyroY, gyroZ;
 
 double accXangle, accYangle, accZangle;   // Angle calculate using the accelerometer
-double kalAngleX, kalAngleY, kalAngleZ;   // Calculate the angle using a Kalman filter
-Kalman kalmanX; 
-Kalman kalmanY;
-Kalman kalmanZ;
 
+//controls XYZ axises. 
 Servo servoX,servoY, servoZ;
-Servo servoYmirror;
-
-const int buttonPin = 13;
-int buttonState = 0;
-
-int pos_prev, pos_new;
 
 uint32_t timer;
+
+
 int main(void) {
   init();
   setup();
+  
   while(1) {
     loop();
   }
+  
   return 0;
 }
 
-void setup() {
 
-  pinMode(buttonPin, INPUT);
-  
+void setup() {
   Serial.begin(57600);
   Serial.println("Searching for mpu6050 I2C device...");
   
-  sei();    //enables interrupts on arduino
+  sei();
 
   mpu6050.initialize();
   _delay_ms(50);
@@ -76,77 +63,67 @@ void setup() {
   mpu6050.setFullScaleGyroRange(MPU6050_GYRO_FS_250);
   mpu6050.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
 
+  //initialize the sensor readings
   mpu6050.getMotion6(&accX,&accY,&accZ,&gyroX,&gyroY,&gyroZ);
-  
+
+  //initialize the angles for first run. (setting up/calibrating)
   accYangle = (atan2(accX, accZ) + PI) * RAD_TO_DEG;
   accXangle = (atan2(accY, accZ) + PI) * RAD_TO_DEG;
-  accZangle = (atan2(accZ, accX) + PI) * RAD_TO_DEG;
+  accZangle = (atan2(accX, accY) + PI) * RAD_TO_DEG;
 
-  kalmanX.setAngle(accXangle); // Set starting angle
-  kalmanY.setAngle(accYangle);
-  kalmanZ.setAngle(accZangle);
-  
+  //initialize timer for calculation of acceleration
   timer = micros();
-  
-  servoX.attach(3);   //CONNECTS TO BACKUP MOTOR  
-  servoY.attach(5);   //CONNECTS TO MOTOR 1
-  servoZ.attach(6);   //MOTOR 4
-  servoYmirror.attach(9); //CONNECTS TO MOTOR 2
-  
-  servoX.writeMicroseconds(MOTOR_3_MID); // Position servos at 0 degrees. Value found by experimenting
-  servoY.writeMicroseconds(MOTOR_1_MID);
-  servoYmirror.writeMicroseconds(MOTOR_2_MID);
-  servoZ.writeMicroseconds(MOTOR_4_MID); //TESTING VALUE ONLY. 
-  delay(5000);   //delay for 5 seconds to allow setup to complete
+
+
+  //attach the servos to their respective pins for outputs
+  servoX.attach(6);
+  servoY.attach(7);
+  servoZ.attach(8);
+
+  //initialize servo position. 
+  servoX.writeMicroseconds(/*FILL IN VALUE*/); 
+  servoY.writeMicroseconds(/*FILL IN VALUE*/);
+  servoZ.writeMicroseconds(/*FILL IN VALUE*/);
+
+  //give the servos some time to adjust
+  delay(5000);  
 }
 
 
 void loop() {
-
-  buttonState = digitalRead(buttonPin);
-  
+  //gets the raw values from the MPU6050
   mpu6050.getMotion6(&accX,&accY,&accZ,&gyroX,&gyroY,&gyroZ);
 
   accXangle = (atan2(accY, accZ) + PI) * RAD_TO_DEG;
   accYangle = (atan2(accX, accZ) + PI) * RAD_TO_DEG;
-  accZangle = (atan2(accZ,accX) + PI) * RAD_TO_DEG;
+  accZangle = (atan2(accX, accY) + PI) * RAD_TO_DEG;
 
   double gyroXrate = (double)gyroX / 131.0;
   double gyroYrate = -((double)gyroY / 131.0);
-  double gyroZrate = (double)gyroZ / 131.0;
+  double gyroZrate = -((double)gyroY / 131.0);
 
+  //kalman filter is used to get the angle to move the servos at. 
+  //can change to Fast Fourier Transform. 
+  //found that a lot of people use kalman filters for their simplicity. 
   kalAngleX = kalmanX.getAngle(accXangle, gyroXrate, (double)(micros() - timer) / 1000000); 
   kalAngleY = kalmanY.getAngle(accYangle, gyroYrate, (double)(micros() - timer) / 1000000);
-  kalAngleZ = kalmanZ.getAngle(accZangle, gyroZrate, (double)(micros() - timer) / 1000000);
-  
+
+  //used to get the acceleration rate to get to the certain angle. 
+  //keeps a timer on the movement. 
   timer = micros();
 
-  kalAngleX -= 180; //Reverse angles for compensation by servos
-  kalAngleY -= 180;
-  kalAngleZ -= 180;
-
-  pos_prev = pos_new;
-  pos_new = MOTOR_3_MID + kalAngleX * 18.55;
   
-  //if (buttonState == HIGH) {
-    //servoX.writeMicroseconds(1750); 
-//    int position = pos_prev;
-//
-//    //slowly move the mug down to drinking level
-//    if( position < 2000 ) {
-//      position += 10;
-//    } else {
-//      position = 2000;
-//    }
-//    
-    //servoX.writeMicroseconds(position); 
- //} else {
-    servoX.writeMicroseconds(MOTOR_3_MID + kalAngleX * 18.55); 
-  //}
+  kalAngleX-=180; //Reverse angles for compensation by servos
+  kalAngleY-=180;
+  kalAngleZ-=180;
 
-  servoY.writeMicroseconds(MOTOR_1_MID + kalAngleY * 18.55);// Angles converted to microsecs and sent as position to servos
-  servoYmirror.writeMicroseconds(2000 - (MOTOR_2_MID + kalAngleY * 18.55) + 1500);
-  servoZ.writeMicroseconds(MOTOR_4_MID + kalAngleZ * 18.55);
+  servoY.writeMicroseconds(1410+kalAngleY*18.55);// Angles converted to microsecs and sent as position to servos
+  servoX.writeMicroseconds(1400+kalAngleX*18.55); 
+  servoZ.writeMicroseconds(1400+kalAngleZ*18.55); 
+
+  //refresh the servos to keep them alive. 
+  servoX.refresh();
+  servoY.refresh();
 }
 
 
